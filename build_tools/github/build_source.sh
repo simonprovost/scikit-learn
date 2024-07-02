@@ -13,7 +13,9 @@ source build_env/bin/activate
 python -m pip install numpy scipy cython
 python -m pip install twine build
 
-cd scikit-learn/scikit-learn
+ls -la
+pwd
+cd scikit-lexicographical-trees/scikit-lexicographical-trees
 python -m build --sdist
 
 # Check whether the source distribution will render correctly
