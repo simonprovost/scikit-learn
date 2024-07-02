@@ -132,6 +132,8 @@ cdef class Splitter(BaseSplitter):
         float64_t min_weight_leaf,
         object random_state,
         const int8_t[:] monotonic_cst,
+        float64_t threshold_gain=0.0015,
+        dict feature_index_map=None,
         *argv
     ):
         """
@@ -171,6 +173,8 @@ cdef class Splitter(BaseSplitter):
         self.random_state = random_state
         self.monotonic_cst = monotonic_cst
         self.with_monotonic_cst = monotonic_cst is not None
+        self.threshold_gain = threshold_gain
+        self.feature_index_map = feature_index_map
 
     def __reduce__(self):
         return (type(self), (self.criterion,
@@ -178,7 +182,9 @@ cdef class Splitter(BaseSplitter):
                              self.min_samples_leaf,
                              self.min_weight_leaf,
                              self.random_state,
-                             self.monotonic_cst.base if self.monotonic_cst is not None else None), self.__getstate__())
+                             self.monotonic_cst.base if self.monotonic_cst is not None else None,
+                             self.threshold_gain,
+                             self.feature_index_map,), self.__getstate__())
 
     cdef int init(
         self,
@@ -186,6 +192,8 @@ cdef class Splitter(BaseSplitter):
         const float64_t[:, ::1] y,
         const float64_t[:] sample_weight,
         const unsigned char[::1] missing_values_in_feature_mask,
+        float64_t threshold_gain=0.0015,
+        dict feature_index_map=None,
     ) except -1:
         """Initialize the splitter.
 
@@ -249,6 +257,9 @@ cdef class Splitter(BaseSplitter):
         self.y = y
 
         self.sample_weight = sample_weight
+
+        self.threshold_gain = threshold_gain
+        self.feature_index_map = feature_index_map
 
         self.criterion.init(
             self.y,
@@ -675,6 +686,198 @@ cdef inline intp_t node_split_best(
     memcpy(&constant_features[n_known_constants],
            &features[n_known_constants],
            sizeof(intp_t) * n_found_constants)
+
+    # Return values
+    parent_record.n_constant_features = n_total_constants
+    split[0] = best_split
+    return 0
+
+cdef inline int node_lexicoRF_split(
+    Splitter splitter,
+    Partitioner partitioner,
+    Criterion criterion,
+    ParentInfo* parent_record,
+    SplitRecord* split,
+    float threshold_gain,
+    dict feature_index_map
+) except -1 nogil:
+    """
+    Find the best split on node samples[start:end] using LexicoRF splitting strategy.
+    """
+    # Updated types for indexing and size definitions
+    cdef intp_t start = splitter.start
+    cdef intp_t end = splitter.end
+    cdef intp_t[::1] features = splitter.features
+    cdef float[::1] feature_values = splitter.feature_values
+    cdef intp_t max_features = splitter.max_features
+    cdef intp_t min_samples_leaf = splitter.min_samples_leaf
+    cdef double min_weight_leaf = splitter.min_weight_leaf
+    cdef uint32_t* random_state = &splitter.rand_r_state
+
+    cdef SplitRecord best_split, current_split
+    cdef double current_proxy_improvement = -INFINITY
+    cdef double best_proxy_improvement = -INFINITY
+
+    cdef double impurity = parent_record.impurity
+    cdef intp_t n_known_constants = parent_record.n_constant_features
+    cdef intp_t n_visited_features = 0
+    cdef intp_t n_found_constants = 0
+    cdef intp_t n_drawn_constants = 0
+    cdef intp_t n_total_constants = n_known_constants
+
+    cdef intp_t f_i = splitter.n_features
+    cdef intp_t f_j
+    cdef intp_t p
+    cdef intp_t p_prev
+
+    cdef intp_t best_time_index = 0
+    cdef intp_t current_time_index = 0
+    cdef intp_t current_feature_in_group = 0
+    cdef intp_t best_feature_in_group = 0
+
+    _init_split(&best_split, end)
+    partitioner.init_node_split(start, end)
+
+    # Sample up to max_features without replacement using a
+    # Fisher-Yates-based algorithm (using the local variables `f_i` and
+    # `f_j` to compute a permutation of the `features` array).
+    #
+    # Skip the CPU intensive evaluation of the impurity criterion for
+    # features that were already detected as constant (hence not suitable
+    # for good splitting) by ancestor nodes and save the information on
+    # newly discovered constant features to spare computation on descendant
+    # nodes.
+    while (f_i > n_total_constants and  # Stop early if remaining features
+                                        # are constant
+            (n_visited_features < max_features or
+             # At least one drawn features must be non constant
+             n_visited_features <= n_found_constants + n_drawn_constants)):
+
+        n_visited_features += 1
+
+        # Loop invariant: elements of features in
+        # - [:n_drawn_constant[ holds drawn and known constant features;
+        # - [n_drawn_constant:n_known_constant[ holds known constant
+        #   features that haven't been drawn yet;
+        # - [n_known_constant:n_total_constant[ holds newly found constant
+        #   features;
+        # - [n_total_constant:f_i[ holds features that haven't been drawn
+        #   yet and aren't constant apriori.
+        # - [f_i:n_features[ holds features that have been drawn
+        #   and aren't constant.
+
+        # Draw a feature at random
+        f_j = rand_int(n_drawn_constants, f_i - n_found_constants,
+                       random_state)
+
+        if f_j < n_known_constants:
+            # f_j in the interval [n_drawn_constants, n_known_constants[
+            features[n_drawn_constants], features[f_j] = features[f_j], features[n_drawn_constants]
+
+            n_drawn_constants += 1
+            continue
+
+        # f_j in the interval [n_known_constants, f_i - n_found_constants[
+        f_j += n_found_constants
+        # f_j in the interval [n_total_constants, f_i[
+        current_split.feature = features[f_j]
+        partitioner.sort_samples_and_feature_values(current_split.feature)
+        criterion.init_missing(0)  # MISSING VALUES ARE NOT HANDLED
+
+        if feature_values[end - 1] <= feature_values[start] + FEATURE_THRESHOLD:
+            features[f_j], features[n_total_constants] = features[n_total_constants], features[f_j]
+
+            n_found_constants += 1
+            n_total_constants += 1
+            continue
+
+        f_i -= 1
+        features[f_i], features[f_j] = features[f_j], features[f_i]
+
+        # Evaluate all splits
+        # At this point, the criterion has a view into the samples that was sorted
+        # by the partitioner. The criterion will use that ordering when evaluating the splits.
+        criterion.reset()
+        p = start
+
+        while p < end:
+            partitioner.next_p(&p_prev, &p)
+
+            if p >= end:
+                continue
+
+            current_split.pos = p
+
+            # Reject if min_samples_leaf is not guaranteed
+            if splitter.check_presplit_conditions(&current_split, 0, 0) == 1:
+                continue
+
+            criterion.update(current_split.pos)
+
+            # Reject if min_weight_leaf is not satisfied
+            if splitter.check_postsplit_conditions() == 1:
+                continue
+
+            current_proxy_improvement = criterion.proxy_impurity_improvement()
+            current_proxy_improvement = criterion.proxy_impurity_improvement() / (
+                    (current_split.pos - start) +
+                    (end - current_split.pos)
+            )
+            current_feature = current_split.feature
+            best_feature = best_split.feature
+
+            with gil:
+                current_feature_in_group = feature_index_map.get(current_feature, -1)
+                best_feature_in_group = feature_index_map.get(best_feature, -1) if current_feature_in_group != -1 else -1
+
+                def calculate_threshold_and_set_best_split():
+                    current_split.threshold = (feature_values[p_prev] / 2.0 + feature_values[p] / 2.0)
+                    if current_split.threshold in [feature_values[p], INFINITY, -INFINITY]:
+                        current_split.threshold = feature_values[p_prev]
+                    return current_split
+
+                if current_feature_in_group != -1 and best_feature_in_group != -1:
+                    if current_proxy_improvement - threshold_gain > best_proxy_improvement or best_proxy_improvement == -INFINITY:
+                        best_proxy_improvement = current_proxy_improvement
+                        best_time_index = current_feature_in_group
+                        best_split = calculate_threshold_and_set_best_split()
+                    elif best_proxy_improvement - threshold_gain <= current_proxy_improvement <= best_proxy_improvement + threshold_gain:
+                        current_time_index = current_feature_in_group
+                        if current_time_index == best_time_index and current_proxy_improvement > best_proxy_improvement:
+                            best_proxy_improvement = current_proxy_improvement
+                            best_split = calculate_threshold_and_set_best_split()
+                        elif current_time_index > best_time_index:
+                            best_time_index = current_time_index
+                            best_proxy_improvement = current_proxy_improvement
+                            best_split = calculate_threshold_and_set_best_split()
+                elif current_proxy_improvement > best_proxy_improvement:
+                    best_proxy_improvement = current_proxy_improvement
+                    best_split = calculate_threshold_and_set_best_split()
+
+    # Reorganize into samples[start:best_split.pos] + samples[best_split.pos:end]
+    if best_split.pos < end:
+        partitioner.partition_samples_final(
+            best_split.pos,
+            best_split.threshold,
+            best_split.feature,
+            0
+        )
+        criterion.reset()
+        criterion.update(best_split.pos)
+        criterion.children_impurity(
+            &best_split.impurity_left, &best_split.impurity_right
+        )
+        best_split.improvement = criterion.impurity_improvement(
+            impurity,
+            best_split.impurity_left,
+            best_split.impurity_right
+        )
+
+    # Respect invariant for constant features: the original order of
+    # element in features[:n_known_constants] must be preserved for sibling
+    # and child nodes
+    memcpy(&features[0], &splitter.constant_features[0], sizeof(intp_t) * n_known_constants)
+    memcpy(&splitter.constant_features[n_known_constants], &features[n_known_constants], sizeof(intp_t) * n_found_constants)
 
     # Return values
     parent_record.n_constant_features = n_total_constants
@@ -1626,8 +1829,10 @@ cdef class BestSplitter(Splitter):
         const float64_t[:, ::1] y,
         const float64_t[:] sample_weight,
         const unsigned char[::1] missing_values_in_feature_mask,
+        float64_t threshold_gain=0.0015,
+        dict feature_index_map=None,
     ) except -1:
-        Splitter.init(self, X, y, sample_weight, missing_values_in_feature_mask)
+        Splitter.init(self, X, y, sample_weight, missing_values_in_feature_mask, threshold_gain, feature_index_map)
         self.partitioner = DensePartitioner(
             X, self.samples, self.feature_values, missing_values_in_feature_mask
         )
@@ -1645,6 +1850,39 @@ cdef class BestSplitter(Splitter):
             parent_record,
         )
 
+cdef class LexicoRFSplitter(Splitter):
+    """Splitter for finding the LexicoRF split on dense data."""
+    cdef DensePartitioner partitioner
+
+    cdef int init(
+        self,
+        object X,
+        const float64_t[:, ::1] y,
+        const float64_t[:] sample_weight,
+        const unsigned char[::1] missing_values_in_feature_mask,
+        float64_t threshold_gain=0.0015,
+        dict feature_index_map=None,
+    ) except -1:
+        Splitter.init(self, X, y, sample_weight, missing_values_in_feature_mask, threshold_gain, feature_index_map)
+        self.partitioner = DensePartitioner(
+            X, self.samples, self.feature_values, missing_values_in_feature_mask
+        )
+
+    cdef int node_split(
+        self,
+        ParentInfo* parent_record,
+        SplitRecord* split
+    ) except -1 nogil:
+        return node_lexicoRF_split(
+            self,
+            self.partitioner,
+            self.criterion,
+            parent_record,
+            split,
+            self.threshold_gain,
+            self.feature_index_map
+        )
+
 cdef class BestSparseSplitter(Splitter):
     """Splitter for finding the best split, using the sparse data."""
     cdef SparsePartitioner partitioner
@@ -1654,8 +1892,10 @@ cdef class BestSparseSplitter(Splitter):
         const float64_t[:, ::1] y,
         const float64_t[:] sample_weight,
         const unsigned char[::1] missing_values_in_feature_mask,
+        float64_t threshold_gain=0.0015,
+        dict feature_index_map=None,
     ) except -1:
-        Splitter.init(self, X, y, sample_weight, missing_values_in_feature_mask)
+        Splitter.init(self, X, y, sample_weight, missing_values_in_feature_mask, threshold_gain, feature_index_map)
         self.partitioner = SparsePartitioner(
             X, self.samples, self.n_samples, self.feature_values, missing_values_in_feature_mask
         )
@@ -1682,8 +1922,10 @@ cdef class RandomSplitter(Splitter):
         const float64_t[:, ::1] y,
         const float64_t[:] sample_weight,
         const unsigned char[::1] missing_values_in_feature_mask,
+        float64_t threshold_gain=0.0015,
+        dict feature_index_map=None,
     ) except -1:
-        Splitter.init(self, X, y, sample_weight, missing_values_in_feature_mask)
+        Splitter.init(self, X, y, sample_weight, missing_values_in_feature_mask, threshold_gain, feature_index_map)
         self.partitioner = DensePartitioner(
             X, self.samples, self.feature_values, missing_values_in_feature_mask
         )
@@ -1710,8 +1952,10 @@ cdef class RandomSparseSplitter(Splitter):
         const float64_t[:, ::1] y,
         const float64_t[:] sample_weight,
         const unsigned char[::1] missing_values_in_feature_mask,
+        float64_t threshold_gain=0.0015,
+        dict feature_index_map=None,
     ) except -1:
-        Splitter.init(self, X, y, sample_weight, missing_values_in_feature_mask)
+        Splitter.init(self, X, y, sample_weight, missing_values_in_feature_mask, threshold_gain, feature_index_map)
         self.partitioner = SparsePartitioner(
             X, self.samples, self.n_samples, self.feature_values, missing_values_in_feature_mask
         )

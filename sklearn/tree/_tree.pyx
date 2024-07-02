@@ -155,6 +155,9 @@ cdef struct StackRecord:
 cdef class DepthFirstTreeBuilder(TreeBuilder):
     """Build a decision tree in depth-first fashion."""
 
+    cdef float64_t threshold_gain
+    cdef dict feature_index_map
+
     def __cinit__(
         self,
         Splitter splitter,
@@ -165,6 +168,8 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
         float64_t min_impurity_decrease,
         unsigned char store_leaf_values=False,
         cnp.ndarray initial_roots=None,
+        float64_t threshold_gain=0.0015,
+        dict feature_index_map=None
     ):
         self.splitter = splitter
         self.min_samples_split = min_samples_split
@@ -174,6 +179,8 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
         self.min_impurity_decrease = min_impurity_decrease
         self.store_leaf_values = store_leaf_values
         self.initial_roots = initial_roots
+        self.threshold_gain = threshold_gain
+        self.feature_index_map = feature_index_map
 
     def __reduce__(self):
         """Reduce re-implementation, for pickling."""
@@ -245,7 +252,7 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
 
         # initialize the splitter using sorted samples
         cdef Splitter splitter = self.splitter
-        splitter.init(X_new, y_new, sample_weight, missing_values_in_feature_mask)
+        splitter.init(X_new, y_new, sample_weight, missing_values_in_feature_mask, self.threshold_gain, self.feature_index_map)
 
         # convert dict to numpy array and store value
         self.initial_roots = np.array(list(false_roots.items()))
@@ -257,6 +264,8 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
         const float64_t[:, ::1] y,
         const float64_t[:] sample_weight=None,
         const unsigned char[::1] missing_values_in_feature_mask=None,
+        float64_t threshold_gain=0.0015,
+        dict feature_index_map=None,
     ):
         """Build a decision tree from the training set (X, y)."""
 
@@ -279,7 +288,7 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
         cdef bint first = 0
         if initial_roots is None:
             # Recursive partition (without actual recursion)
-            splitter.init(X, y, sample_weight, missing_values_in_feature_mask)
+            splitter.init(X, y, sample_weight, missing_values_in_feature_mask, self.threshold_gain, self.feature_index_map)
 
             if tree.max_depth <= 10:
                 init_capacity = <intp_t> (2 ** (tree.max_depth + 1)) - 1
@@ -666,6 +675,8 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
     highest impurity improvement.
     """
     cdef intp_t max_leaf_nodes
+    cdef float64_t threshold_gain
+    cdef dict feature_index_map
 
     def __cinit__(
         self,
@@ -678,6 +689,8 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
         float64_t min_impurity_decrease,
         unsigned char store_leaf_values=False,
         cnp.ndarray initial_roots=None,
+        float64_t threshold_gain=0.0015,
+        dict feature_index_map=None,
     ):
         self.splitter = splitter
         self.min_samples_split = min_samples_split
@@ -688,6 +701,8 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
         self.min_impurity_decrease = min_impurity_decrease
         self.store_leaf_values = store_leaf_values
         self.initial_roots = initial_roots
+        self.threshold_gain = threshold_gain
+        self.feature_index_map = feature_index_map
 
     def __reduce__(self):
         """Reduce re-implementation, for pickling."""
@@ -708,6 +723,8 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
         const float64_t[:, ::1] y,
         const float64_t[:] sample_weight=None,
         const unsigned char[::1] missing_values_in_feature_mask=None,
+        float64_t threshold_gain=0.0015,
+        dict feature_index_map=None,
     ):
         """Build a decision tree from the training set (X, y)."""
 
@@ -721,7 +738,7 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
         cdef unsigned char store_leaf_values = self.store_leaf_values
 
         # Recursive partition (without actual recursion)
-        splitter.init(X, y, sample_weight, missing_values_in_feature_mask)
+        splitter.init(X, y, sample_weight, missing_values_in_feature_mask, self.threshold_gain, self.feature_index_map)
 
         cdef vector[FrontierRecord] frontier
         cdef FrontierRecord record

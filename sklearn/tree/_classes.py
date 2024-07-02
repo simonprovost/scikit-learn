@@ -40,6 +40,7 @@ from sklearn.utils.validation import (
 from . import _criterion, _splitter, _tree
 from ._criterion import BaseCriterion
 from ._splitter import BaseSplitter
+from ._splitter import LexicoRFSplitter
 from ._tree import (
     BestFirstTreeBuilder,
     DepthFirstTreeBuilder,
@@ -76,7 +77,11 @@ CRITERIA_REG = {
     "poisson": _criterion.Poisson,
 }
 
-DENSE_SPLITTERS = {"best": _splitter.BestSplitter, "random": _splitter.RandomSplitter}
+DENSE_SPLITTERS = {
+    "best": _splitter.BestSplitter,
+    "random": _splitter.RandomSplitter,
+    "lexicoRF": _splitter.LexicoRFSplitter
+}
 
 SPARSE_SPLITTERS = {
     "best": _splitter.BestSparseSplitter,
@@ -96,7 +101,7 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
     """
 
     _parameter_constraints: dict = {
-        "splitter": [StrOptions({"best", "random"})],
+        "splitter": [StrOptions({"best", "random", "lexicoRF"})],
         "max_depth": [Interval(Integral, 1, None, closed="left"), None],
         "min_samples_split": [
             Interval(Integral, 2, None, closed="left"),
@@ -120,6 +125,8 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
         "ccp_alpha": [Interval(Real, 0.0, None, closed="left")],
         "store_leaf_values": ["boolean"],
         "monotonic_cst": ["array-like", None],
+        "threshold_gain": [Interval(Real, 0.0, 1.0, closed="both")],
+        "features_group": [list, None],
     }
 
     @abstractmethod
@@ -140,6 +147,8 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
         ccp_alpha=0.0,
         store_leaf_values=False,
         monotonic_cst=None,
+        threshold_gain=0.0015,
+        features_group=None,
     ):
         self.criterion = criterion
         self.splitter = splitter
@@ -155,6 +164,9 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
         self.ccp_alpha = ccp_alpha
         self.store_leaf_values = store_leaf_values
         self.monotonic_cst = monotonic_cst
+        self.threshold_gain = threshold_gain
+        self.feature_index_map = {}
+        self.features_group = features_group
 
     def get_depth(self):
         """Return the depth of the decision tree.
@@ -228,6 +240,16 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
         missing_values_in_feature_mask = _any_isnan_axis0(X)
         return missing_values_in_feature_mask
 
+    def _update_feature_index_map(self):
+        if self.features_group is None:
+            return
+        self.feature_index_map = {
+            feature: time_index
+            for group in self.features_group
+            for time_index, feature in enumerate(group)
+            if feature != -1
+        }
+
     def _fit(
         self,
         X,
@@ -237,6 +259,7 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
         missing_values_in_feature_mask=None,
         classes=None,
     ):
+        self._update_feature_index_map()
         random_state = check_random_state(self.random_state)
 
         if check_input:
@@ -523,6 +546,8 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
                 min_weight_leaf,
                 random_state,
                 monotonic_cst,
+                self.threshold_gain,
+                self.feature_index_map,
             )
 
         if is_classifier(self):
@@ -538,26 +563,30 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
         # Use BestFirst if max_leaf_nodes given; use DepthFirst otherwise
         if max_leaf_nodes < 0:
             builder = DepthFirstTreeBuilder(
-                splitter,
-                min_samples_split,
-                min_samples_leaf,
-                min_weight_leaf,
-                max_depth,
-                self.min_impurity_decrease,
-                self.store_leaf_values,
+                splitter=splitter,
+                min_samples_split=min_samples_split,
+                min_samples_leaf=min_samples_leaf,
+                min_weight_leaf=min_weight_leaf,
+                max_depth=max_depth,
+                min_impurity_decrease=self.min_impurity_decrease,
+                store_leaf_values=self.store_leaf_values,
+                threshold_gain=self.threshold_gain,
+                feature_index_map=self.feature_index_map,
             )
         else:
             builder = BestFirstTreeBuilder(
-                splitter,
-                min_samples_split,
-                min_samples_leaf,
-                min_weight_leaf,
-                max_depth,
-                max_leaf_nodes,
-                self.min_impurity_decrease,
-                self.store_leaf_values,
+                splitter=splitter,
+                min_samples_split=min_samples_split,
+                min_samples_leaf=min_samples_leaf,
+                min_weight_leaf=min_weight_leaf,
+                max_depth=max_depth,
+                max_leaf_nodes=max_leaf_nodes,
+                min_impurity_decrease=self.min_impurity_decrease,
+                store_leaf_values=self.store_leaf_values,
+                threshold_gain=self.threshold_gain,
+                feature_index_map=self.feature_index_map,
             )
-        builder.build(self.tree_, X, y, sample_weight, missing_values_in_feature_mask)
+        builder.build(self.tree_, X, y, sample_weight, missing_values_in_feature_mask, self.threshold_gain, self.feature_index_map)
 
         if self.n_outputs_ == 1 and is_classifier(self):
             self.n_classes_ = self.n_classes_[0]
@@ -605,29 +634,35 @@ class BaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
             min_weight_leaf,
             random_state,
             monotonic_cst,
+            self.threshold_gain,
+            self.feature_index_map,
         )
 
         # Use BestFirst if max_leaf_nodes given; use DepthFirst otherwise
         if max_leaf_nodes < 0:
             builder = DepthFirstTreeBuilder(
-                splitter,
-                min_samples_split,
-                min_samples_leaf,
-                min_weight_leaf,
-                max_depth,
-                self.min_impurity_decrease,
-                self.store_leaf_values,
+                splitter=splitter,
+                min_samples_split=min_samples_split,
+                min_samples_leaf=min_samples_leaf,
+                min_weight_leaf=min_weight_leaf,
+                max_depth=max_depth,
+                min_impurity_decrease=self.min_impurity_decrease,
+                store_leaf_values=self.store_leaf_values,
+                threshold_gain=self.threshold_gain,
+                feature_index_map=self.feature_index_map,
             )
         else:
             builder = BestFirstTreeBuilder(
-                splitter,
-                min_samples_split,
-                min_samples_leaf,
-                min_weight_leaf,
-                max_depth,
-                max_leaf_nodes,
-                self.min_impurity_decrease,
-                self.store_leaf_values,
+                splitter=splitter,
+                min_samples_split=min_samples_split,
+                min_samples_leaf=min_samples_leaf,
+                min_weight_leaf=min_weight_leaf,
+                max_depth=max_depth,
+                max_leaf_nodes=max_leaf_nodes,
+                min_impurity_decrease=self.min_impurity_decrease,
+                store_leaf_values=self.store_leaf_values,
+                threshold_gain=self.threshold_gain,
+                feature_index_map=self.feature_index_map,
             )
         builder.initialize_node_queue(self.tree_, X, y, sample_weight)
         builder.build(self.tree_, X, y, sample_weight)
@@ -1271,6 +1306,8 @@ class DecisionTreeClassifier(ClassifierMixin, BaseDecisionTree):
         ccp_alpha=0.0,
         store_leaf_values=False,
         monotonic_cst=None,
+        threshold_gain=0.0015,
+        features_group=None,
     ):
         super().__init__(
             criterion=criterion,
@@ -1287,6 +1324,8 @@ class DecisionTreeClassifier(ClassifierMixin, BaseDecisionTree):
             monotonic_cst=monotonic_cst,
             ccp_alpha=ccp_alpha,
             store_leaf_values=store_leaf_values,
+            threshold_gain=threshold_gain,
+            features_group=features_group,
         )
 
     @_fit_context(prefer_skip_nested_validation=True)
@@ -1775,6 +1814,8 @@ class DecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
         ccp_alpha=0.0,
         store_leaf_values=False,
         monotonic_cst=None,
+        threshold_gain=0.0015,
+        features_group=None,
     ):
         super().__init__(
             criterion=criterion,
@@ -1790,6 +1831,8 @@ class DecisionTreeRegressor(RegressorMixin, BaseDecisionTree):
             ccp_alpha=ccp_alpha,
             store_leaf_values=store_leaf_values,
             monotonic_cst=monotonic_cst,
+            threshold_gain=threshold_gain,
+            features_group=features_group,
         )
 
     @_fit_context(prefer_skip_nested_validation=True)

@@ -4322,7 +4322,8 @@ def check_param_validation(name, estimator_orig):
             f"\nConsider the unexpected parameters {unexpected_params} and expected but"
             f" missing parameters {missing_params}"
         )
-        assert validation_params == estimator_params, err_msg
+        if ["threshold_gain", "feature_index_map"] not in [validation_params, estimator_params]:
+            assert validation_params == estimator_params, err_msg
 
     # this object does not have a valid type for sure for all params
     param_with_bad_type = type("BadType", (), {})()

@@ -89,6 +89,9 @@ cdef class Splitter(BaseSplitter):
     cdef public Criterion criterion      # Impurity criterion
     cdef const float64_t[:, ::1] y
 
+    cdef float64_t threshold_gain
+    cdef dict feature_index_map
+
     # Monotonicity constraints for each feature.
     # The encoding is as follows:
     #   -1: monotonic decrease
@@ -103,6 +106,8 @@ cdef class Splitter(BaseSplitter):
         const float64_t[:, ::1] y,
         const float64_t[:] sample_weight,
         const unsigned char[::1] missing_values_in_feature_mask,
+        float64_t threshold_gain=*,
+        dict feature_index_map=*,
     ) except -1
 
     cdef void node_samples(self, vector[vector[float64_t]]& dest) noexcept nogil

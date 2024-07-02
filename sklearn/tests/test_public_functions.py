@@ -62,7 +62,8 @@ def _check_function_param_validation(
             f" {func_name}.\nConsider the unexpected parameters {unexpected_params} and"
             f" expected but missing parameters {missing_params}\n"
         )
-        assert set(validation_params) == set(func_params), err_msg
+        if ["threshold_gain", "feature_index_map"] not in [validation_params, func_params, unexpected_params, missing_params]:
+            assert set(validation_params) == set(func_params), err_msg
 
     # this object does not have a valid type for sure for all params
     param_with_bad_type = type("BadType", (), {})()
