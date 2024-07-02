@@ -112,7 +112,7 @@ jobs:
           # Non-macos arm64 envrionments already have conda installed
           echo "CONDA_HOME=/usr/local/miniconda" >> $GITHUB_ENV
 
-      - name: Build and test wheels
+      - name: 👀Build and test wheels
         env:
           CIBW_PRERELEASE_PYTHONS: ${{ matrix.prerelease }}
           CIBW_ENVIRONMENT: SKLEARN_SKIP_NETWORK_TESTS=1
@@ -133,7 +133,7 @@ jobs:
 
   # Build the source distribution under Linux
   build_sdist:
-    name: Source distribution
+    name: ⚙️ Source distribution
     runs-on: ubuntu-latest
     needs: check_build_trigger
     if: needs.check_build_trigger.outputs.build

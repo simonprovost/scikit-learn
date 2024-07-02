@@ -28,20 +28,21 @@ except ImportError:
 builtins.__SKLEARN_SETUP__ = True
 
 
-DISTNAME = "scikit-lexicographical_trees"
+DISTNAME = "scikit-lexicographical-trees"
 DESCRIPTION = "A set of python modules for machine learning and data mining"
 with open("README.rst") as f:
     LONG_DESCRIPTION = f.read()
-MAINTAINER = "scikit-learn developers"
-MAINTAINER_EMAIL = "scikit-learn@python.org"
-URL = "https://scikit-learn.org"
-DOWNLOAD_URL = "https://pypi.org/project/scikit-learn/#files"
+MAINTAINER = "Simon Provost"
+MAINTAINER_EMAIL = "simon.gilbert.provost@gmail.com"
+URL = "https://simonprovost.github.io/scikit-longitudinal/"
+DOWNLOAD_URL = "https://pypi.org/project/scikit-lexicographical-trees/#files"
 LICENSE = "new BSD"
 PROJECT_URLS = {
-    "Bug Tracker": "https://github.com/scikit-learn/scikit-learn/issues",
-    "Documentation": "https://scikit-learn.org/stable/documentation.html",
-    "Source Code": "https://github.com/scikit-learn/scikit-learn",
+    "Bug Tracker": "https://github.com/simonprovost/scikit-lexicographical-trees/issues",
+    "Documentation": "https://simonprovost.github.io/scikit-longitudinal/",
+    "Source Code": "https://github.com/simonprovost/scikit-lexicographical-trees",
 }
+
 
 # We can actually import a restricted version of sklearn that
 # does not need the compiled code
@@ -51,7 +52,8 @@ from sklearn._build_utils import _check_cython_version  # noqa
 from sklearn.externals._packaging.version import parse as parse_version  # noqa
 
 
-VERSION = sklearn.__version__
+# VERSION = sklearn.__version__
+VERSION = "0.0.4"
 
 # Custom clean command to remove build artifacts
 

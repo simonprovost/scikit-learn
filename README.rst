@@ -1,3 +1,32 @@
+Scikit-lexicographical-trees
+=============================
+
+**Scikit-lexicographical-trees** is an adaptation of the Scikit-Learn trees module to support lexicographical approaches
+for longitudinal data. Refer to the following document for further information:
+`Lexico Decision Tree Classifier <https://simonprovost.github.io/scikit-longitudinal/API/estimators/trees/lexico_decision_tree_classifier/>`_.
+
+Classifiers and regressors supporting lexicographical approaches:
+
+🌲 Decision Tree Classifier
+🌲 Random Forest Classifier
+🌲 Decision Tree Regressor
+
+For more information, refer to the Scikit-Longitudinal
+– main library utilizing the current fork – : `Scikit-Longitudinal <https://simonprovost.github.io/scikit-longitudinal>`_.
+
+Acknowledgements
+----------------
+
+This fork is from NeuroData, an endeavor that paved the path for improving trees/forests in Scikit-Learn.
+Nonetheless, while our compliments go to the NeuroData team, we also like to thank the original Scikit-Learn
+team for their excellent effort over the years in providing a robust and versatile library for machine learning.
+
+Do not forget to cite them!
+
+💬💬💬💬💬💬💬💬💬💬
+
+🔄🔄🔄 Original Scikit-Learn README 🔄🔄🔄
+
 .. -*- mode: rst -*-
 
 |Azure| |CirrusCI| |Codecov| |CircleCI| |Nightly wheels| |Black| |PythonVersion| |PyPi| |DOI| |Benchmark|

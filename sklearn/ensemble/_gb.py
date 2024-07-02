@@ -394,6 +394,9 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
         validation_fraction=0.1,
         n_iter_no_change=None,
         tol=1e-4,
+        splitter="best",
+        features_group=None,
+        threshold_gain=0.0015,
     ):
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
@@ -416,6 +419,9 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
         self.validation_fraction = validation_fraction
         self.n_iter_no_change = n_iter_no_change
         self.tol = tol
+        self.splitter = splitter
+        self.features_group = features_group
+        self.threshold_gain = threshold_gain
 
     @abstractmethod
     def _encode_y(self, y=None, sample_weight=None):
@@ -470,7 +476,7 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
             # induce regression tree on the negative gradient
             tree = DecisionTreeRegressor(
                 criterion=self.criterion,
-                splitter="best",
+                splitter=self.splitter,
                 max_depth=self.max_depth,
                 min_samples_split=self.min_samples_split,
                 min_samples_leaf=self.min_samples_leaf,
@@ -480,6 +486,8 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
                 max_leaf_nodes=self.max_leaf_nodes,
                 random_state=random_state,
                 ccp_alpha=self.ccp_alpha,
+                threshold_gain=self.threshold_gain,
+                features_group=self.features_group,
             )
 
             if self.subsample < 1.0:
@@ -1470,6 +1478,9 @@ class GradientBoostingClassifier(ClassifierMixin, BaseGradientBoosting):
         n_iter_no_change=None,
         tol=1e-4,
         ccp_alpha=0.0,
+        splitter="best",
+        features_group=None,
+        threshold_gain=0.0015,
     ):
         super().__init__(
             loss=loss,
@@ -1492,6 +1503,9 @@ class GradientBoostingClassifier(ClassifierMixin, BaseGradientBoosting):
             n_iter_no_change=n_iter_no_change,
             tol=tol,
             ccp_alpha=ccp_alpha,
+            splitter=splitter,
+            features_group=features_group,
+            threshold_gain=threshold_gain,
         )
 
     def _encode_y(self, y, sample_weight):
